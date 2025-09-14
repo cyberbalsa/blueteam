@@ -1,0 +1,22 @@
+#cloud-config
+# Debian Trixie user-data script for CDT class
+package_reboot_if_required: true
+package_update: true
+package_upgrade: true
+
+packages:
+  - curl
+  - wget
+  - vim
+  - openssh-server
+  - tmux
+  - nano
+  - screen
+  - git
+  - magic-wormhole
+  - net-tools
+  - htop
+  - nginx-full
+
+# Set timezone
+timezone: America/New_York
