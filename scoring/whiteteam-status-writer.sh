@@ -232,7 +232,7 @@ get_curl_status() {
     # Format: IP Health_Status Success_Rate Command_Injection_Vulnerable CPUINFO_Injection_Vulnerable
     # Example: 100.65.2.8 true 25/30 (83.33%) false false
     local curl_line=$(grep "^$ip " "$CURL_SCORE_COPY" 2>/dev/null)
-    
+    echo "$curl_line" > /tmp/test.txt
     if [ -z "$curl_line" ]; then
         echo "UNKNOWN:NO_DATA"
         return
@@ -243,7 +243,6 @@ get_curl_status() {
     local success_rate=$(echo "$curl_line" | awk '{print $3}')
     local cmd_injection=$(echo "$curl_line" | awk '{print $4}')
     local cpuinfo_injection=$(echo "$curl_line" | awk '{print $5}')
-    
     # Determine overall database status
     local db_status="UNHEALTHY"
     if [ "$health_status" = "true" ]; then

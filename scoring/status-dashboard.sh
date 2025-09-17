@@ -9,8 +9,8 @@ SSH_FILE="/tmp/ssh-backdoor-scores.txt"
 SCP_FILE="/tmp/whiteteam-scp-status.txt"
 
 # Unicode checkmarks and crosses
-CHECK="✓"
-CROSS="✗"
+CHECK=" G"
+CROSS="�B"
 UNKNOWN="?"
 
 # Colors
